@@ -1,8 +1,0 @@
-{
-  "name": "Planner Tecnici O&M",
-  "short_name": "Planner O&M",
-  "start_url": "./planner.html",
-  "display": "standalone",
-  "background_color": "#121D31",
-  "theme_color": "#121D31"
-}
