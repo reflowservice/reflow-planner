@@ -132,6 +132,11 @@ button.stat[aria-pressed="true"] { background: rgba(255, 120, 120, .10); box-sha
 .legend i { width: 9px; height: 9px; border-radius: 50%; }
 
 /* ---- area di lavoro ---- */
+.band { flex: none; }
+.band.sized { height: var(--hh); overflow-y: auto; overscroll-behavior: contain; }
+.split { flex: none; height: 22px; background: var(--band); display: grid; place-items: center; cursor: row-resize; touch-action: none; user-select: none; -webkit-user-select: none; outline: none; }
+.split i { width: 52px; height: 5px; border-radius: 3px; background: rgba(255,255,255,.35); transition: background .15s; }
+.split:hover i, .split:focus-visible i, .split.on i { background: var(--accent); }
 .main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding-block: 12px max(12px, env(safe-area-inset-bottom, 0px)); }
 .banner { background: var(--todo-bg); color: var(--todo-fg); border: 1px solid var(--todo-bd); border-radius: 10px; padding: 8px 12px; font-size: 12.5px; }
 .hint { color: var(--ink-3); font-size: 11.5px; display: flex; gap: 14px; flex-wrap: wrap; }
@@ -367,6 +372,7 @@ button.stat[aria-pressed="true"] { background: rgba(255, 120, 120, .10); box-sha
       </div>
     </div>
   </header>
+  <div class="split" id="split" role="separator" aria-orientation="horizontal" tabindex="0" title="Trascina per alzare o abbassare la tabella (doppio tocco: ripristina)" aria-label="Trascina per ridimensionare la tabella"><i></i></div>
   <main class="main pad">
     <div class="banner" id="banner" hidden></div>
     <div class="hint" id="hint"><span><b>Trascina</b> una card per spostarla</span><span><b>Tira il bordo destro</b> per allungarla</span><span><b>Clicca una casella vuota</b> per aggiungere</span><span>Le settimane prima del 19/10/2026 sono lo <b>storico PROG.</b>, in sola lettura</span></div>
@@ -434,7 +440,8 @@ const pref = (() => { try { return JSON.parse(localStorage.getItem("planner-om")
 if (pref.weeks) S.weeks = pref.weeks; if (pref.weekend) S.weekend = true; if (pref.area !== undefined) S.area = pref.area;
 if (Array.isArray(pref.collapsed)) S.collapsed = new Set(pref.collapsed);
 if (typeof pref.tec === "string") S.tec = pref.tec; if (typeof pref.reg === "string") S.reg = pref.reg;
-const savePref = () => { try { localStorage.setItem("planner-om", JSON.stringify({ weeks: S.weeks, weekend: S.weekend, area: S.area, tec: S.tec, reg: S.reg, collapsed: [...S.collapsed] })); } catch (e) {} };
+let HH = null;
+const savePref = () => { try { localStorage.setItem("planner-om", JSON.stringify({ hh: HH, weeks: S.weeks, weekend: S.weekend, area: S.area, tec: S.tec, reg: S.reg, collapsed: [...S.collapsed] })); } catch (e) {} };
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -761,6 +768,31 @@ async function patchCard(id, patch, label) {
 
 /* ---------- trascinamento ---------- */
 const board = $("board");
+/* ---------- maniglia: alza/abbassa la tabella (trascina verso l'alto per dare piu' spazio alla tabella) ---------- */
+const bandEl = document.querySelector("header.band"), splitEl = $("split"), HMIN = 64;
+function setHH(px, persist) {
+  const max = Math.max(HMIN, window.innerHeight - 170);
+  HH = px == null ? null : Math.round(Math.min(max, Math.max(HMIN, px)));
+  if (HH == null) { bandEl.classList.remove("sized"); bandEl.style.removeProperty("--hh"); }
+  else { bandEl.classList.add("sized"); bandEl.style.setProperty("--hh", HH + "px"); }
+  if (persist) savePref();
+}
+if (typeof pref.hh === "number") setHH(pref.hh);
+let sp = null;
+splitEl.addEventListener("pointerdown", ev => {
+  if (ev.button !== 0) return;
+  sp = { y: ev.clientY, h: bandEl.offsetHeight }; splitEl.classList.add("on"); splitEl.setPointerCapture(ev.pointerId); ev.preventDefault();
+});
+splitEl.addEventListener("pointermove", ev => { if (sp) setHH(sp.h + ev.clientY - sp.y); });
+const spEnd = () => { if (!sp) return; sp = null; splitEl.classList.remove("on"); savePref(); };
+splitEl.addEventListener("pointerup", spEnd);
+splitEl.addEventListener("pointercancel", spEnd);
+splitEl.addEventListener("dblclick", () => setHH(null, true));
+splitEl.addEventListener("keydown", ev => {
+  if (ev.key === "ArrowUp" || ev.key === "ArrowDown") { ev.preventDefault(); setHH(bandEl.offsetHeight + (ev.key === "ArrowDown" ? 24 : -24), true); }
+  else if (ev.key === "Home" || ev.key === "Enter") { ev.preventDefault(); setHH(null, true); }
+});
+window.addEventListener("resize", () => { if (HH != null) setHH(HH); });
 let suppressClick = false;
 function dayAt(lane, x) {
   for (const el of lane.querySelectorAll(".cell")) { const r = el.getBoundingClientRect(); if (x >= r.left && x < r.right) return el; }
