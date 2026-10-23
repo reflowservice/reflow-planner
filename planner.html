@@ -1216,7 +1216,7 @@ const isDate = s => typeof s === "string" && /^\d{4}-\d\d-\d\d$/.test(s);
 /* storico: un documento per settimana; si leggono le settimane visibili più le 8 precedenti (interventi lunghi) */
 let unsubH = null, histKey = "";
 function subHist() {
-  if (!S.db) return;
+  if (!S.db || S.histLocal) return; // su SharePoint lo storico e' gia' tutto in memoria
   const mons = []; for (let w = -8; w < S.weeks; w++) { const m = S.week + 7 * w; if (toIso(m) < LIVE_FROM) mons.push(toIso(m)); }
   const key = mons.join(",");
   if (key === histKey) return;
@@ -1370,7 +1370,18 @@ async function saveJson(filename, data) {
     S.gotRes = true;
     S.imp = new Map(impianti.map(i => [i.id || i.nome, i]));
     buildImpRe();
-    S.hist = storico;
+    // storico: un documento per settimana ({id, lunedi, items}); lo appiattisco come faceva subHist, una volta sola
+    S.histLocal = true;
+    S.hist = [];
+    storico.forEach(d => {
+      if (!d || !Array.isArray(d.items)) return;
+      d.items.forEach((it, i) => {
+        if (!it || !isDate(it.s) || !isDate(it.e)) return;
+        S.hist.push({ id: "h:" + d.id + ":" + i, hist: true, kind: it.k === "a" ? "assenza" : "lavoro", risorsa: it.r || "h:" + slug(it.n || "storico"),
+          hname: String(it.n || "Storico"), harea: String(it.a || ""), testo: String(it.t || ""), inizio: it.s, fine: it.e, stato: "Completato",
+          tipo: it.tipo || "", prio: it.prio || "", tk: it.tk || "", assenza: it.ass || "", ore: it.ore ?? null, note: it.note || "" });
+      });
+    });
     S.gotCards = true;
 
     // Intercetta la funzione write
