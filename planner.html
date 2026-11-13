@@ -740,7 +740,7 @@ function render() {
         const cls = ["card", abs ? "abs" : c.hist ? "hist" : (ST_CLS[c.stato] || "s-plan"), c.hist ? "ro" : "", sg.cl ? "cl" : "", sg.cr ? "cr" : "", clash ? "clash" : "", S.q ? (matches(c) ? "hit" : "dim") : ""].join(" ");
         const label = abs ? (c.assenza || "Assenza") + (c.ore ? ` · ${fmt(+c.ore)} h` : "") : (c.testo || "(senza descrizione)");
         const meta = abs ? (c.note ? `<span>${esc(c.note)}</span>` : "") :
-          `${c.prio === "Alta" && !c.hist ? '<span class="p">ALTA</span>' : ""}${c.tk ? `<span>${esc(c.tk)}</span>` : ""}${Array.isArray(c.foto) && c.foto.length ? `<span>${c.foto.length} foto</span>` : ""}${impsOf(c).some(id => (S.imp.get(id).suf || []).length) ? "<span>SUF</span>" : ""}${e > s ? `<span>${range(s, e)}</span>` : ""}${c.hist && c.tipo && c.tipo !== "Altro" ? `<span>${esc(c.tipo)}</span>` : ""}`;
+          `${c.prio === "Alta" && !c.hist ? '<span class="p">ALTA</span>' : ""}${c.tk ? `<span>${esc(c.tk)}</span>` : ""}${Array.isArray(c.foto) && c.foto.length ? `<span>${c.foto.length} foto</span>` : ""}${e > s ? `<span>${range(s, e)}</span>` : ""}${c.hist && c.tipo && c.tipo !== "Altro" ? `<span>${esc(c.tipo)}</span>` : ""}`;
         h += `<div class="${cls}" data-id="${esc(c.id)}" tabindex="0" role="button" aria-label="${esc(label)}" title="${esc(label + " · " + range(s, e))}" style="grid-column:${sg.a + 1}/${sg.b + 2};grid-row:${sg.lane + 1}">` +
           `<div class="t">${esc(label)}</div>` + (meta ? `<div class="m">${meta}</div>` : "") +
           (S.canWrite && !c.hist && !sg.cr ? '<span class="grip" aria-hidden="true"></span>' : "") + `</div>`;
@@ -933,7 +933,6 @@ function impPanel(id, ro) {
   const maps = ll ? `https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lon}` : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(d.localita || d.nome)}`;
   const tel = (r.tel || []).map(t => `<span class="copy"><span class="mono">${esc(t)}</span><button type="button" data-copy="${esc(t)}">Copia</button></span>`).join("");
   const mail = (r.email || []).map(e => `<span class="copy"><span>${esc(e)}</span><button type="button" data-copy="${esc(e)}">Copia</button></span>`).join("");
-  const suf = (d.suf || []).map(f => `<a class="file" href="${esc(f.url)}" target="_blank" rel="noopener"><span class="ext">PDF</span>${esc(f.nome)}</a>`).join("");
   const kw = d.kw && !isNaN(+d.kw) ? fmt(+d.kw) + " kWp" : d.kw;
   return `<section class="imp"><header><b>${esc(d.nome)}</b><span>${[d.tipo, kw, d.regione].filter(Boolean).map(esc).join(" · ")}</span></header><dl>` +
     `<dt>Località</dt><dd>${esc(d.localita || "—")}</dd>` +
@@ -942,7 +941,6 @@ function impPanel(id, ro) {
     `<dt>Referente</dt><dd>${r.nome ? `<b>${esc(r.nome)}</b>` : ""}${tel}${mail}${!r.nome && !tel && !mail ? (r.testo ? esc(r.testo) : "Non presente in MASTER") : ""}</dd>` +
     `<dt>PM</dt><dd><span>${esc(d.pm || "—")}${d.pm2 ? `<span class="sub"> · 2ª linea ${esc(d.pm2)}</span>` : ""}</span></dd>` +
     (d.tempi ? `<dt>Tempi intervento</dt><dd class="sub">${esc(d.tempi)}</dd>` : "") +
-    `<dt>SUF</dt><dd>${suf || '<span class="sub">Nessun SUF caricato</span>'}${!ro && S.canWrite && S.assets ? `<label class="btn small">Carica PDF<input type="file" accept="application/pdf" data-sufup="${esc(id)}" hidden></label>` : ""}</dd>` +
     `</dl></section>`;
 }
 function fotoSection(c, ro) {
@@ -1096,7 +1094,7 @@ async function duplicate() {
   if (ok) toast(`Duplicato per ${(resById().get(to) || {}).nome}`);
 }
 
-/* ---------- impianti, SUF e foto nella scheda ---------- */
+/* ---------- impianti e foto nella scheda ---------- */
 $("dbody").addEventListener("click", async ev => {
   const t = ev.target;
   const rm = t.closest("[data-rmimp]");
@@ -1130,17 +1128,6 @@ $("dbody").addEventListener("change", async ev => {
     d[t.dataset.impf] = t.value.trim();
     const ok = await write(() => S.db.collection("impianti").doc(id).update({ [t.dataset.impf]: d[t.dataset.impf] }));
     if (ok) toast("Indirizzo salvato");
-    return;
-  }
-  if (t.dataset.sufup && t.files && t.files[0]) {
-    const id = t.dataset.sufup, d = S.imp.get(id), f = t.files[0];
-    if (f.type !== "application/pdf") { toast("Il SUF deve essere un PDF"); return; }
-    toast("Caricamento del SUF…");
-    const a = await uploadAsset(f); if (!a) return;
-    d.suf = (d.suf || []).concat([{ id: a.id, url: a.url, nome: f.name, size: a.sizeBytes || f.size }]);
-    renderImps();
-    const ok = await write(() => S.db.collection("impianti").doc(id).update({ suf: d.suf }));
-    if (ok) toast("SUF caricato");
     return;
   }
   if (t.dataset.fotoup && t.files && t.files.length && edit && edit.id) {
