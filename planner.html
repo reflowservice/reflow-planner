@@ -20,7 +20,7 @@
   --hist-bg: #F3F5F8; --hist-bd: #DEE3EA; --hist-fg: #4F5A6B;
   --abs-a: #ECEFF3; --abs-b: #F6F7F9; --abs-fg: #4B5565;
   --over-bg: #FDECEC; --crit: #D23F3F; --warn: #D98A12; --ok: #24935A;
-  --a-nord: #3D6FE0; --a-centro: #14A08C; --a-puglia: #E39B1B; --a-calabria: #D35B3C; --a-sfalci: #4FA02B; --a-none: #8590A3;
+  --a-nord: #3D6FE0; --a-centro: #14A08C; --a-puglia: #E39B1B; --a-calabria: #D35B3C; --a-none: #8590A3;
   --shadow-sm: 0 1px 2px rgba(15, 27, 46, .06); --shadow: 0 1px 3px rgba(15, 27, 46, .06), 0 8px 24px rgba(15, 27, 46, .06);
   --shadow-lg: 0 18px 50px rgba(10, 18, 32, .28);
   --f-display: "Barlow Semi Condensed", "Arial Narrow", Arial, sans-serif;
@@ -42,7 +42,7 @@
   --hist-bg: #18202D; --hist-bd: #263243; --hist-fg: #A6B2C4;
   --abs-a: #1A2230; --abs-b: #151C28; --abs-fg: #A6B2C4;
   --over-bg: #3A1A1C; --crit: #F27878; --warn: #F5B54F; --ok: #5CC88F;
-  --a-nord: #7FA3F2; --a-centro: #4ED0BC; --a-puglia: #F5B54F; --a-calabria: #F08D70; --a-sfalci: #8DD067; --a-none: #75839A;
+  --a-nord: #7FA3F2; --a-centro: #4ED0BC; --a-puglia: #F5B54F; --a-calabria: #F08D70; --a-none: #75839A;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3); --shadow: 0 1px 3px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .25); --shadow-lg: 0 18px 50px rgba(0, 0, 0, .55);
   color-scheme: dark;
 } }
@@ -60,7 +60,7 @@
   --hist-bg: #18202D; --hist-bd: #263243; --hist-fg: #A6B2C4;
   --abs-a: #1A2230; --abs-b: #151C28; --abs-fg: #A6B2C4;
   --over-bg: #3A1A1C; --crit: #F27878; --warn: #F5B54F; --ok: #5CC88F;
-  --a-nord: #7FA3F2; --a-centro: #4ED0BC; --a-puglia: #F5B54F; --a-calabria: #F08D70; --a-sfalci: #8DD067; --a-none: #75839A;
+  --a-nord: #7FA3F2; --a-centro: #4ED0BC; --a-puglia: #F5B54F; --a-calabria: #F08D70; --a-none: #75839A;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3); --shadow: 0 1px 3px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .25); --shadow-lg: 0 18px 50px rgba(0, 0, 0, .55);
   color-scheme: dark;
 }
@@ -422,8 +422,8 @@ button.stat[aria-pressed="true"] { background: rgba(255, 120, 120, .10); box-sha
 <script>
 (() => {
 "use strict";
-const AREAS = ["Nord", "Centro", "Puglia", "Calabria", "Sfalci-lavaggi"];
-const AREA_C = { "Nord": "--a-nord", "Centro": "--a-centro", "Puglia": "--a-puglia", "Calabria": "--a-calabria", "Sfalci-lavaggi": "--a-sfalci", "": "--a-none" };
+const AREAS = ["Nord", "Centro", "Puglia", "Calabria"];
+const AREA_C = { "Nord": "--a-nord", "Centro": "--a-centro", "Puglia": "--a-puglia", "Calabria": "--a-calabria", "": "--a-none" };
 const STATI = ["Da pianificare", "Da confermare", "Pianificato", "In corso", "Sospeso", "Completato", "Annullato"];
 const ST_CLS = { "Da pianificare": "s-todo", "Da confermare": "s-tbc", "Pianificato": "s-plan", "In corso": "s-run", "Sospeso": "s-hold", "Completato": "s-done", "Annullato": "s-off" };
 const ST_DOT = { "Da pianificare": "--todo-dot", "Da confermare": "--tbc-dot", "Pianificato": "--plan-dot", "In corso": "--run-dot", "Sospeso": "--hold-dot", "Completato": "--done-dot", "Annullato": "--hold-dot" };
