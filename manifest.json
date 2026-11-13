@@ -1,8 +1,8 @@
 {
   "id": "./planner.html",
-  "name": "Planner Tecnici O&M",
-  "short_name": "Planner O&M",
-  "description": "Planner Tecnici O&M - Reflow",
+  "name": "REFLOW PLANNER",
+  "short_name": "REFLOW PLANNER",
+  "description": "REFLOW PLANNER - pianificazione tecnici e subappalti O&M",
   "start_url": "./planner.html",
   "scope": "./",
   "display": "standalone",

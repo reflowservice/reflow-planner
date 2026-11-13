@@ -1,2 +1,2 @@
 # reflow-planner
-Planner Tecnici O&amp;M – App di pianificazione tecnici e subappalti per Reflow. PWA con dati su SharePoint.
+REFLOW PLANNER – app di pianificazione tecnici e subappalti O&M per Reflow. PWA con dati su SharePoint.

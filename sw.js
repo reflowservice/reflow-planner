@@ -1,4 +1,4 @@
-const CACHE = "planner-v3";
+const CACHE = "planner-v4";
 const ASSETS = ["./planner.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
