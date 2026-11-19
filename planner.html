@@ -4,6 +4,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
+<script>/* dopo "Aggiorna" la pagina si ricarica con questo segnale: la schermata di aggiornamento compare subito (classe refreshing), senza lampi dell'app */
+try{if(sessionStorage.getItem("planner_refresh")==="1"){document.documentElement.classList.add("refreshing");setTimeout(function(){document.documentElement.classList.remove("refreshing")},60000);}}catch(e){}</script>
 <style>
 /* Layout: control-room band (marchio, settimana, indicatori, filtri) sopra una board risorse × giorni a tutta altezza, con testata giorni e colonna risorse fisse. */
 :root {
@@ -360,6 +362,25 @@ button.stat[aria-pressed="true"] { background: rgba(255, 120, 120, .10); box-sha
   .rrow .opt { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ---- schermata di aggiornamento (dopo "Aggiorna") ---- */
+/* --beat = durata di un battito: la schermata resta per 3 battiti (minimo 3 s) e si chiude da sola a dati caricati */
+#gate { --beat: 1s; position: fixed; inset: 0; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px;
+  color: var(--band-ink); background: radial-gradient(900px 420px at 80% -60px, var(--band-3), transparent 70%), var(--band); transition: opacity .5s, visibility .5s; }
+.refreshing #gate { display: flex; }
+#gate.out { opacity: 0; visibility: hidden; }
+.gate-logo { height: 46px; width: auto; display: block; margin-bottom: 30px; }
+.gate-title { margin: 0; font: 600 clamp(30px, 6vw, 52px)/1 var(--f-display); letter-spacing: .06em; text-transform: uppercase; }
+.gate-title span { color: var(--accent); }
+.gate-sub { margin: 12px 0 0; font-size: 14px; color: var(--band-ink-2); letter-spacing: .02em; }
+#gate-msg { margin: 26px 0 0; min-height: 1.4em; font-size: 14px; color: var(--band-ink); }
+.gate-pulse { display: block; width: min(86vw, 340px); height: auto; margin-top: 22px; overflow: visible; }
+.gate-pulse .g { stroke: var(--band-line); stroke-width: 1; stroke-dasharray: 2 4; }
+.gate-pulse .c { fill: var(--accent); transform-box: fill-box; transform-origin: left center; opacity: 0;
+  animation: gateCard var(--beat, 1s) ease-in-out infinite; animation-delay: calc(var(--i) * 70ms); }
+.gate-pulse .c.l { fill: var(--band-ink-2); }
+@keyframes gateCard { 0% { transform: scaleX(0); opacity: 0; } 15% { opacity: 1; } 60% { transform: scaleX(1); opacity: 1; } 100% { transform: scaleX(1); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .gate-pulse .c { animation: none; opacity: .8; transform: none; } }
 </style>
 
 <div class="app" id="app">
@@ -380,6 +401,7 @@ button.stat[aria-pressed="true"] { background: rgba(255, 120, 120, .10); box-sha
       <div class="seg"><button id="wkend" aria-pressed="false">Sab-Dom</button></div>
       <input class="search" id="q" type="search" placeholder="Cerca impianto, TK, attività" aria-label="Cerca">
       <button class="bb" id="resBtn">Risorse</button>
+      <button class="bb" id="reloadBtn" title="Rilegge i dati da SharePoint"><span id="reloadLbl">Aggiorna</span></button>
       <button class="bb cta" id="newBtn">+ Nuovo lavoro</button>
     </div>
     <div class="stats" id="kpis"></div>
@@ -418,6 +440,14 @@ button.stat[aria-pressed="true"] { background: rgba(255, 120, 120, .10); box-sha
   <div class="dft" id="dft"></div>
 </aside>
 <div class="toast" id="toast" hidden><span id="tmsg"></span><button id="tundo" hidden>Annulla</button></div>
+<div id="gate" role="status" aria-live="polite">
+  <img class="gate-logo" alt="Reflow">
+  <h2 class="gate-title">REFLOW <span>PLANNER</span></h2>
+  <p class="gate-sub">Pianificazione tecnici e subappalti</p>
+  <p id="gate-msg">Aggiornamento dei dati…</p>
+  <svg class="gate-pulse" viewBox="0 0 340 54" aria-hidden="true"><line class="g" x1="68" y1="0" x2="68" y2="54"/><line class="g" x1="136" y1="0" x2="136" y2="54"/><line class="g" x1="204" y1="0" x2="204" y2="54"/><line class="g" x1="272" y1="0" x2="272" y2="54"/><rect class="c" x="4" y="4" width="128" height="10" rx="3" style="--i:0"/><rect class="c l" x="144" y="4" width="56" height="10" rx="3" style="--i:4"/><rect class="c" x="212" y="4" width="124" height="10" rx="3" style="--i:6"/><rect class="c" x="72" y="22" width="64" height="10" rx="3" style="--i:2"/><rect class="c" x="148" y="22" width="120" height="10" rx="3" style="--i:4"/><rect class="c l" x="280" y="22" width="56" height="10" rx="3" style="--i:8"/><rect class="c l" x="4" y="40" width="56" height="10" rx="3" style="--i:0"/><rect class="c" x="72" y="40" width="128" height="10" rx="3" style="--i:2"/><rect class="c" x="212" y="40" width="64" height="10" rx="3" style="--i:6"/><rect class="c l" x="288" y="40" width="48" height="10" rx="3" style="--i:8"/></svg>
+</div>
+<script>try{if(document.documentElement.classList.contains("refreshing")){var gl=document.querySelector(".logo");if(gl)document.querySelector(".gate-logo").src=gl.src;}}catch(e){}</script>
 
 <script>
 (() => {
@@ -463,7 +493,8 @@ const fmt = v => (Math.round(v * 10) / 10).toString().replace(".", ",");
 
 /* ---------- stato ---------- */
 const S = { res: [], cards: [], hist: [], imp: new Map(), assets: null, week: mondayOf(TODAY), weeks: 1, weekend: false, area: "", tec: "", reg: "", q: "", issues: false,
-  collapsed: new Set(), canWrite: false, db: null, gotRes: false, gotCards: false, drag: null, pending: false, noDb: false };
+  collapsed: new Set(), canWrite: false, db: null, gotRes: false, gotCards: false, drag: null, pending: false, noDb: false,
+  saving: 0, saveErr: new Set(), formDirty: false };
 const pref = (() => { try { return JSON.parse(localStorage.getItem("planner-om") || "{}"); } catch (e) { return {}; } })();
 if (pref.weeks) S.weeks = pref.weeks; if (pref.weekend) S.weekend = true; if (pref.area !== undefined) S.area = pref.area;
 if (Array.isArray(pref.collapsed)) S.collapsed = new Set(pref.collapsed);
@@ -756,15 +787,16 @@ function render() {
 
 /* ---------- avvisi ---------- */
 let tTimer = null, undoFn = null;
-function toast(msg, undo) {
+function toast(msg, undo, ms) {
   $("tmsg").textContent = msg; undoFn = undo || null; $("tundo").hidden = !undo; $("toast").hidden = false;
-  clearTimeout(tTimer); tTimer = setTimeout(() => { $("toast").hidden = true; undoFn = null; }, undo ? 7000 : 3500);
+  clearTimeout(tTimer); tTimer = setTimeout(() => { $("toast").hidden = true; undoFn = null; }, ms || (undo ? 7000 : 3500));
 }
 $("tundo").addEventListener("click", () => { $("toast").hidden = true; const f = undoFn; undoFn = null; if (f) f(); });
 
 /* ---------- scrittura ---------- */
 async function write(fn) {
   if (!S.canWrite) return false;
+  S.saving++;
   try {
     await fn();
     // Auto-save su SharePoint
@@ -778,7 +810,7 @@ async function write(fn) {
     console.error("Write error", e);
     toast("Modifica non salvata");
     return false;
-  }
+  } finally { S.saving--; }
 }
 function showReadOnly() {
   $("banner").hidden = false;
@@ -973,9 +1005,10 @@ async function uploadAsset(blob) {
   try { return await S.assets.upload(blob); }
   catch (e) { toast("Caricamento non riuscito" + (e && e.message ? ": " + e.message : ". Riprova.")); return null; }
 }
-function openDrawer() { $("scrim").hidden = false; $("drawer").hidden = false; }
-function closeDrawer() { $("scrim").hidden = true; $("drawer").hidden = true; edit = null; render(); }
+function openDrawer() { S.formDirty = false; $("scrim").hidden = false; $("drawer").hidden = false; }
+function closeDrawer() { S.formDirty = false; $("scrim").hidden = true; $("drawer").hidden = true; edit = null; render(); }
 $("scrim").addEventListener("click", closeDrawer);
+$("dbody").addEventListener("input", () => { S.formDirty = true; });
 $("dclose").addEventListener("click", closeDrawer);
 
 function openCard(c, preset) {
@@ -1378,7 +1411,7 @@ async function loadJson(filename) {
   ];
   for (const path of candidates) {
     try {
-      const data = await graph(path);
+      const data = await graph(path, { cache: "no-store" });
       console.log("Found with path:", path);
       return Array.isArray(data) ? data : [];
     } catch (e) {
@@ -1390,6 +1423,7 @@ async function loadJson(filename) {
 }
 
 async function saveJson(filename, data) {
+  S.saving++;
   try {
     const sid = await getSiteId();
     const path = `/sites/${sid}/drive/root:/${FOLDER_PATH}/${filename}:/content`;
@@ -1399,11 +1433,56 @@ async function saveJson(filename, data) {
       body: JSON.stringify(data, null, 2)
     });
     console.log("Saved", filename, "OK");
+    S.saveErr.delete(filename);
     toast("Salvato");
   } catch (e) {
     console.error("Save failed", filename, e);
+    S.saveErr.add(filename);
     toast("Errore salvataggio: " + e.message);
-  }
+  } finally { S.saving--; }
+}
+
+/* ---------- Aggiorna: schermata di aggiornamento e pulsante ---------- */
+const REFRESH = document.documentElement.classList.contains("refreshing");
+try { sessionStorage.removeItem("planner_refresh"); } catch (e) {}
+const gate = (() => {
+  const el = $("gate"); let closed = !REFRESH;
+  const beatMs = () => { const v = getComputedStyle(el).getPropertyValue("--beat").trim(), n = parseFloat(v); return (v.endsWith("ms") ? n : n * 1000) || 1000; };
+  const finish = () => { if (closed) return; closed = true; el.classList.add("out");
+    setTimeout(() => { document.documentElement.classList.remove("refreshing"); el.classList.remove("out"); }, 500); };
+  return {
+    // a dati caricati: chiude alla fine del terzo battito dall'apertura della pagina (minimo 3 s), o al primo battito utile se i dati arrivano dopo
+    ready() {
+      if (closed) return; $("gate-msg").textContent = "Dati aggiornati";
+      const B = beatMs(), c = el.querySelector(".gate-pulse .c"), an = c && c.getAnimations ? c.getAnimations()[0] : null;
+      const t = an && an.currentTime != null ? Number(an.currentTime) : performance.now();
+      setTimeout(finish, Math.ceil(Math.max(t, 3 * B - 1) / B) * B - t);
+    },
+    fail: finish   // errore di accesso: chiude subito, per non coprire il messaggio
+  };
+})();
+setTimeout(gate.fail, 45000);
+const doReload = () => { try { sessionStorage.setItem("planner_refresh", "1"); } catch (e) {} location.reload(); };
+const formDirty = () => $("drawer").hidden ? false : ($("dtitle").textContent === "Risorse" ? !!($("nr-nome") && $("nr-nome").value.trim()) : S.formDirty);
+{
+  const btn = $("reloadBtn"), lbl = $("reloadLbl"); let busy = false, forceUntil = 0, forceTimer = null;
+  const reset = () => { lbl.textContent = "Aggiorna"; forceUntil = 0; };
+  btn.addEventListener("click", async () => {
+    if (busy) return;
+    if (Date.now() < forceUntil) { doReload(); return; }   // seconda pressione dopo l'avviso: ricarica comunque
+    if (S.saving > 0) {   // salvataggi in corso: aspetta (max 30 s), poi ricontrolla
+      busy = true; btn.disabled = true; lbl.textContent = "Salvataggio…";
+      const t0 = Date.now(); while (S.saving > 0 && Date.now() - t0 < 30000) await new Promise(r => setTimeout(r, 100));
+      busy = false; btn.disabled = false; reset();
+      if (S.saving > 0) { toast("Salvataggio ancora in corso: riprova tra qualche istante", null, 5000); return; }
+    }
+    if (S.saveErr.size || formDirty()) {
+      toast(S.saveErr.size ? "Un salvataggio non è riuscito: ricaricando la modifica andrebbe persa. Premi di nuovo per ricaricare comunque." : "C'è una scheda con modifiche non salvate. Premi di nuovo per ricaricare comunque.", null, 8000);
+      lbl.textContent = "Aggiorna comunque"; forceUntil = Date.now() + 8000; clearTimeout(forceTimer); forceTimer = setTimeout(reset, 8000);
+      return;
+    }
+    doReload();
+  });
 }
 
 (async () => {
@@ -1507,10 +1586,12 @@ async function saveJson(filename, data) {
 
     schedule();
     toast("Dati caricati da SharePoint");
+    gate.ready();
   } catch (e) {
     console.error(e);
     S.noDb = true;
     toast("Errore di accesso a SharePoint: " + e.message);
+    gate.fail();
     render();
   }
 })();
