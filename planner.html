@@ -1147,7 +1147,7 @@ $("dbody").addEventListener("click", async ev => {
     const c = cardById(edit.id), list = (c.foto || []).slice(), [gone] = list.splice(+rf.dataset.rmfoto, 1);
     c.foto = list; $("f-fotosec").outerHTML = fotoSection(c, false); render();
     const ok = await write(() => lavRef(c.id).update({ foto: list, updatedAt: new Date().toISOString() }));
-    if (ok && gone && gone.id && gone.sp && S.assets) { try { await S.assets.delete(gone.id); } catch (e) { /* solo gli editor possono cancellare il file: resta nell'archivio */ } }
+    if (ok && gone && gone.id && gone.sp && S.assets) for (const fid of [gone.id].concat(gone.copie || [])) { try { await S.assets.delete(fid); } catch (e) { /* solo gli editor possono cancellare il file: resta nell'archivio */ } }
   }
 });
 $("dbody").addEventListener("change", async ev => {
@@ -1171,7 +1171,7 @@ $("dbody").addEventListener("change", async ev => {
     for (let i = 0; i < files.length; i++) {
       if (lab) lab.firstChild.textContent = `Caricamento ${i + 1}/${files.length}…`;
       const blob = await shrink(files[i]), a = await uploadAsset(blob);
-      if (a) added.push({ id: a.id, url: a.url, nome: files[i].name, at: new Date().toISOString(), sp: !!a.sp });
+      if (a) added.push({ id: a.id, url: a.url, nome: files[i].name, at: new Date().toISOString(), sp: !!a.sp, ...(a.copie ? { copie: a.copie } : {}) });
     }
     if (!added.length) { if (lab) lab.firstChild.textContent = "+ Aggiungi foto"; return; }
     const c = cardById(edit.id), list = (Array.isArray(c.foto) ? c.foto : []).concat(added);
@@ -1531,12 +1531,47 @@ function descr(t) {   // descrizione breve per il nome della cartella: max 60 ca
   const a = d.lastIndexOf("("); if (a >= 0 && d.indexOf(")", a) < 0) d = d.slice(0, a);
   return d.replace(/[\s.\-]+$/, "") || "Intervento";
 }
-function fotoIds() { return ((edit && edit.imps) || []).filter(id => S.imp.has(id) && S.imp.get(id).service); }
+const servs = id => { const v = S.imp.has(id) && S.imp.get(id).service; return !v ? [] : Array.isArray(v) ? v : [v]; };
+function fotoIds() { return ((edit && edit.imps) || []).filter(id => servs(id).length); }
+/* Impianto con più cartelle (sottoimpianti, es. tetto e terra): si sceglie la cartella se il testo del lavoro contiene
+   un dato che la distingue: il nome della cartella (es. "CAMPO C", "BENOZZI C2") oppure parole che stanno solo in alcune
+   cartelle (es. TETTO, SUD, MIA, GASDOTTO, 2023, C4). Le parole del nome dell'impianto contano solo se stanno in una
+   cartella sola; le abbreviazioni col punto (IST., S.) valgono come la parola intera. Senza dato distintivo la foto va
+   in tutte le cartelle (scelta di Luca, 19/11/2026). */
+const parole = t => normTxt(t).toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+const NOPAR = new Set(["SRL", "SPA", "SNC", "SAS", "KWP", "MWP", "IMP", "IMPIANTO", "SERVICE"]);
+const foglia = sv => sv.split("/").slice(-2)[0];
+const utile = w => !NOPAR.has(w) && (/^(19|20)\d\d$/.test(w) || (/[A-Z]/.test(w) && (w.length >= 3 || /\d/.test(w))));
+function scegliServs(id, testo) {
+  const list = servs(id); if (list.length < 2) return list;
+  const nome = " " + parole(S.imp.get(id).nome).join(" ") + " ", nomeP = new Set(parole(S.imp.get(id).nome));
+  const txt = " " + parole(testo).join(" ") + " ", tw = new Set(parole(testo));
+  const fogli = list.map(foglia), W = fogli.map(f => new Set(parole(f)));
+  const abbr = fogli.map(f => [...f.matchAll(/([A-Za-z]+)\./g)].map(x => x[1].toUpperCase()));
+  const presente = (w, j) => W[j].has(w) || abbr[j].some(a => w.startsWith(a) && a.length < w.length)
+    || (/^[A-Z]{3,}$/.test(w) && [...W[j]].some(x => x.length > w.length && x.startsWith(w)));   // IST = ISTITUTI
+  const frasi = fogli.map(f => parole(f.replace(/\(.*$/, "")).join(" "));
+  const punti = list.map((sv, i) => {
+    const fr = frasi[i];
+    let n = fr && fr.includes(" ") && frasi.filter(x => x === fr).length === 1 && !nome.includes(" " + fr + " ") && txt.includes(" " + fr + " ") ? 10 : 0;
+    for (const w of W[i]) {
+      if (!utile(w) || !tw.has(w)) continue;
+      const dove = list.map((x, j) => presente(w, j)).filter(Boolean).length;
+      if (dove === list.length) continue;            // in tutte le cartelle: non distingue
+      if (nomeP.has(w) && dove > 1) continue;        // parola del nome dell'impianto non esclusiva
+      n++;
+    }
+    return n;
+  });
+  const max = Math.max(...punti);
+  return max > 0 ? list.filter((sv, i) => punti[i] === max) : list;
+}
 function fotoDest(c) {
   const ids = fotoIds(), sel = $("f-fotoimp"), id = sel && ids.includes(sel.value) ? sel.value : ids[0];
-  if (!id || !c) return { dir: fotoRiserva(), label: "cartella di riserva REFLOW PLANNER › foto (impianto senza cartella in 5_SERVICE)", ids };
-  const sub = (c.inizio || "").replace(/-/g, ".") + " - " + descr(c.testo);
-  return { base: S.imp.get(id).service, dir: S.imp.get(id).service + "/FOTO/" + sub, label: S.imp.get(id).nome + " › FOTO › " + sub, ids, id };
+  if (!id || !c) return { dirs: [{ dir: fotoRiserva() }], label: "cartella di riserva REFLOW PLANNER › foto (impianto senza cartella in 5_SERVICE)", ids };
+  const sub = (c.inizio || "").replace(/-/g, ".") + " - " + descr(c.testo), list = scegliServs(id, c.testo);
+  const label = S.imp.get(id).nome + " › FOTO › " + sub + (list.length > 1 ? ` (copiata in ${list.length} cartelle: ${list.map(foglia).join("; ")})` : servs(id).length > 1 ? ` (cartella ${foglia(list[0])})` : "");
+  return { dirs: list.map(base => ({ base, dir: base + "/FOTO/" + sub })), label, ids, id };
 }
 async function mkdir(sid, parent, name) {   // crea la cartella se manca; false se manca la cartella superiore
   const r = await graphRaw(`/sites/${sid}/drive/root:/${segEnc(parent)}:/children`, {
@@ -1555,20 +1590,31 @@ const ASSETS = {
   async upload(blob) {
     const sid = await getSiteId(), ext = (blob.type || "").includes("png") ? "png" : (blob.type || "").includes("webp") ? "webp" : "jpg";
     const nome = `${(edit && edit.id) || "foto"}_${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
-    let d = fotoDest(edit && edit.id ? cardById(edit.id) : null), res = await putFoto(sid, d.dir, nome, blob);
-    if (res.status === 404 && d.base) {   // FOTO o sottocartella mancanti: si creano (solo queste due)
-      const sub = d.dir.slice((d.base + "/FOTO/").length);
-      if (await mkdir(sid, d.base, "FOTO") && await mkdir(sid, d.base + "/FOTO", sub)) res = await putFoto(sid, d.dir, nome, blob);
-      else { d = { dir: fotoRiserva(), label: "cartella di riserva REFLOW PLANNER › foto (cartella dell'impianto non trovata)" }; res = await putFoto(sid, d.dir, nome, blob); }
+    const d = fotoDest(edit && edit.id ? cardById(edit.id) : null), fatti = [];
+    for (const t of d.dirs) {   // una copia per cartella
+      let res = await putFoto(sid, t.dir, nome, blob);
+      if (res.status === 404 && t.base) {   // FOTO o sottocartella mancanti: si creano (solo queste due)
+        const sub = t.dir.slice((t.base + "/FOTO/").length);
+        if (await mkdir(sid, t.base, "FOTO") && await mkdir(sid, t.base + "/FOTO", sub)) res = await putFoto(sid, t.dir, nome, blob);
+        else continue;   // cartella dell'impianto non trovata
+      }
+      if (res.status === 404 && !t.base) {   // prima foto del mese nella cartella di riserva
+        const up = t.dir.replace(/\/[^/]*$/, ""), last = t.dir.slice(up.length + 1), fo = up.replace(/\/[^/]*$/, "");
+        await mkdir(sid, fo, "foto"); await mkdir(sid, up, last); res = await putFoto(sid, t.dir, nome, blob);
+      }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      fatti.push(await res.json());
     }
-    if (res.status === 404 && !d.base) {   // prima foto del mese nella cartella di riserva
-      const dir = d.dir, up = dir.replace(/\/[^/]*$/, ""), last = dir.slice(up.length + 1), fo = up.replace(/\/[^/]*$/, "");
-      await mkdir(sid, fo, "foto"); await mkdir(sid, up, last); res = await putFoto(sid, dir, nome, blob);
-    }
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const it = await res.json();
     S.lastFotoDest = d.label;
-    return { id: it.id, url: it.webUrl, sp: true };
+    if (!fatti.length) {   // nessuna cartella dell'impianto trovata: cartella di riserva
+      const dir = fotoRiserva(); let res = await putFoto(sid, dir, nome, blob);
+      if (res.status === 404) { const up = dir.replace(/\/[^/]*$/, ""); await mkdir(sid, up.replace(/\/[^/]*$/, ""), "foto"); await mkdir(sid, up, dir.slice(up.length + 1)); res = await putFoto(sid, dir, nome, blob); }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      fatti.push(await res.json()); S.lastFotoDest = "cartella di riserva REFLOW PLANNER › foto (cartella dell'impianto non trovata)";
+    }
+    const out = { id: fatti[0].id, url: fatti[0].webUrl, sp: true };
+    if (fatti.length > 1) out.copie = fatti.slice(1).map(x => x.id);
+    return out;
   },
   async delete(id) {
     const sid = await getSiteId(), res = await graphRaw(`/sites/${sid}/drive/items/${id}`, { method: "DELETE" });
