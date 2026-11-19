@@ -4,8 +4,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
-<script>/* dopo "Aggiorna" la pagina si ricarica con questo segnale: la schermata di aggiornamento compare subito (classe refreshing), senza lampi dell'app */
-try{if(sessionStorage.getItem("planner_refresh")==="1"){document.documentElement.classList.add("refreshing");setTimeout(function(){document.documentElement.classList.remove("refreshing")},60000);}}catch(e){}</script>
+<script>/* la schermata iniziale (#gate) compare subito, prima dell'app, a ogni apertura; dopo "Aggiorna" il segnale planner_refresh cambia solo il testo. Rete di sicurezza di 60 s. */
+try{document.documentElement.classList.add("gating");setTimeout(function(){document.documentElement.classList.remove("gating")},60000);}catch(e){}</script>
 <style>
 /* Layout: control-room band (marchio, settimana, indicatori, filtri) sopra una board risorse × giorni a tutta altezza, con testata giorni e colonna risorse fisse. */
 :root {
@@ -363,11 +363,11 @@ button.stat[aria-pressed="true"] { background: rgba(255, 120, 120, .10); box-sha
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
-/* ---- schermata di aggiornamento (dopo "Aggiorna") ---- */
+/* ---- schermata iniziale e di aggiornamento (#gate): a ogni apertura e dopo "Aggiorna" ---- */
 /* --beat = durata di un battito: la schermata resta per 3 battiti (minimo 3 s) e si chiude da sola a dati caricati */
 #gate { --beat: 1s; position: fixed; inset: 0; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px;
   color: var(--band-ink); background: radial-gradient(900px 420px at 80% -60px, var(--band-3), transparent 70%), var(--band); transition: opacity .5s, visibility .5s; }
-.refreshing #gate { display: flex; }
+.gating #gate { display: flex; }
 #gate.out { opacity: 0; visibility: hidden; }
 .gate-logo { height: 46px; width: auto; display: block; margin-bottom: 30px; }
 .gate-title { margin: 0; font: 600 clamp(30px, 6vw, 52px)/1 var(--f-display); letter-spacing: .06em; text-transform: uppercase; }
@@ -444,10 +444,10 @@ button.stat[aria-pressed="true"] { background: rgba(255, 120, 120, .10); box-sha
   <img class="gate-logo" alt="Reflow">
   <h2 class="gate-title">REFLOW <span>PLANNER</span></h2>
   <p class="gate-sub">Pianificazione tecnici e subappalti</p>
-  <p id="gate-msg">Aggiornamento dei dati…</p>
+  <p id="gate-msg">Caricamento della pianificazione…</p>
   <svg class="gate-pulse" viewBox="0 0 340 54" aria-hidden="true"><line class="g" x1="68" y1="0" x2="68" y2="54"/><line class="g" x1="136" y1="0" x2="136" y2="54"/><line class="g" x1="204" y1="0" x2="204" y2="54"/><line class="g" x1="272" y1="0" x2="272" y2="54"/><rect class="c" x="4" y="4" width="128" height="10" rx="3" style="--i:0"/><rect class="c l" x="144" y="4" width="56" height="10" rx="3" style="--i:4"/><rect class="c" x="212" y="4" width="124" height="10" rx="3" style="--i:6"/><rect class="c" x="72" y="22" width="64" height="10" rx="3" style="--i:2"/><rect class="c" x="148" y="22" width="120" height="10" rx="3" style="--i:4"/><rect class="c l" x="280" y="22" width="56" height="10" rx="3" style="--i:8"/><rect class="c l" x="4" y="40" width="56" height="10" rx="3" style="--i:0"/><rect class="c" x="72" y="40" width="128" height="10" rx="3" style="--i:2"/><rect class="c" x="212" y="40" width="64" height="10" rx="3" style="--i:6"/><rect class="c l" x="288" y="40" width="48" height="10" rx="3" style="--i:8"/></svg>
 </div>
-<script>try{if(document.documentElement.classList.contains("refreshing")){var gl=document.querySelector(".logo");if(gl)document.querySelector(".gate-logo").src=gl.src;}}catch(e){}</script>
+<script>try{if(document.documentElement.classList.contains("gating")){var gl=document.querySelector(".logo");if(gl)document.querySelector(".gate-logo").src=gl.src;}}catch(e){}</script>
 
 <script>
 (() => {
@@ -1353,7 +1353,7 @@ let accessToken = null;
 async function getToken() {
   const accounts = msalInstance.getAllAccounts();
   if (!accounts.length) {
-    toast("Login Microsoft richiesto…");
+    toast("Login Microsoft richiesto…"); { const m = $("gate-msg"); if (m) m.textContent = "Accesso a Microsoft in corso…"; }
     const result = await msalInstance.loginPopup(loginRequest);
     return result.accessToken;
   }
@@ -1443,17 +1443,18 @@ async function saveJson(filename, data) {
 }
 
 /* ---------- Aggiorna: schermata di aggiornamento e pulsante ---------- */
-const REFRESH = document.documentElement.classList.contains("refreshing");
-try { sessionStorage.removeItem("planner_refresh"); } catch (e) {}
+let REFRESH = false;   // true se la pagina nasce da "Aggiorna"
+try { REFRESH = sessionStorage.getItem("planner_refresh") === "1"; sessionStorage.removeItem("planner_refresh"); } catch (e) {}
+$("gate-msg").textContent = REFRESH ? "Aggiornamento dei dati…" : "Caricamento della pianificazione…";
 const gate = (() => {
-  const el = $("gate"); let closed = !REFRESH;
+  const el = $("gate"); let closed = false;
   const beatMs = () => { const v = getComputedStyle(el).getPropertyValue("--beat").trim(), n = parseFloat(v); return (v.endsWith("ms") ? n : n * 1000) || 1000; };
   const finish = () => { if (closed) return; closed = true; el.classList.add("out");
-    setTimeout(() => { document.documentElement.classList.remove("refreshing"); el.classList.remove("out"); }, 500); };
+    setTimeout(() => { document.documentElement.classList.remove("gating"); el.classList.remove("out"); }, 500); };
   return {
     // a dati caricati: chiude alla fine del terzo battito dall'apertura della pagina (minimo 3 s), o al primo battito utile se i dati arrivano dopo
     ready() {
-      if (closed) return; $("gate-msg").textContent = "Dati aggiornati";
+      if (closed) return; $("gate-msg").textContent = REFRESH ? "Dati aggiornati" : "Dati caricati";
       const B = beatMs(), c = el.querySelector(".gate-pulse .c"), an = c && c.getAnimations ? c.getAnimations()[0] : null;
       const t = an && an.currentTime != null ? Number(an.currentTime) : performance.now();
       setTimeout(finish, Math.ceil(Math.max(t, 3 * B - 1) / B) * B - t);
