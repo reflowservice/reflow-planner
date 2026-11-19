@@ -331,6 +331,8 @@ button.stat[aria-pressed="true"] { background: rgba(255, 120, 120, .10); box-sha
 .fotos { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
 .fotos figure { margin: 0; position: relative; aspect-ratio: 1; border-radius: 9px; overflow: hidden; background: var(--surface-3); max-width: 100%; }
 .fotos img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fotos img:not([src]) { visibility: hidden; }
+.fotos .fotona { display: flex; align-items: center; justify-content: center; height: 100%; padding: 6px; text-align: center; font-size: 11px; color: var(--ink-3, #667); }
 .rmf { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 50%; border: 0; background: rgba(10, 15, 25, .65); color: #fff; font-size: 13px; line-height: 1; }
 .rmf.armed { background: var(--crit); }
 .addf { aspect-ratio: 1; border: 1.5px dashed var(--line-strong); border-radius: 9px; display: grid; place-items: center; text-align: center; font-size: 12px; color: var(--ink-2); cursor: pointer; padding: 6px; }
@@ -976,7 +978,7 @@ function impPanel(id, ro) {
 function fotoSection(c, ro) {
   const f = Array.isArray(c.foto) ? c.foto : [];
   return `<div class="fld" id="f-fotosec"><span>Foto intervento${f.length ? ` · ${f.length}` : ""}</span><div class="fotos">` +
-    f.map((x, i) => `<figure><a href="${esc(x.url)}" target="_blank" rel="noopener"><img src="${esc(x.url)}" alt="${esc(x.nome || "Foto intervento")}" loading="lazy"></a>${ro ? "" : `<button type="button" class="rmf" data-rmfoto="${i}" aria-label="Elimina foto">×</button>`}</figure>`).join("") +
+    f.map((x, i) => `<figure>${x.sp ? `<a href="${esc(x.url)}" target="_blank" rel="noopener" title="Apri in SharePoint"><img data-fid="${esc(x.id)}" alt="${esc(x.nome || "Foto intervento")}"></a>` : `<div class="fotona" title="Foto del vecchio archivio dell'app, non più disponibile">Foto non disponibile</div>`}${ro ? "" : `<button type="button" class="rmf" data-rmfoto="${i}" aria-label="Elimina foto">×</button>`}</figure>`).join("") +
     (!ro && S.assets ? `<label class="addf" id="f-addf">+ Aggiungi foto<input type="file" accept="image/jpeg,image/png,image/webp,image/heic" multiple data-fotoup="1" hidden></label>` : "") +
     `</div>${!f.length && (ro || !S.assets) ? '<span class="sub">Nessuna foto</span>' : ""}</div>`;
 }
@@ -1142,7 +1144,7 @@ $("dbody").addEventListener("click", async ev => {
     const c = cardById(edit.id), list = (c.foto || []).slice(), [gone] = list.splice(+rf.dataset.rmfoto, 1);
     c.foto = list; $("f-fotosec").outerHTML = fotoSection(c, false); render();
     const ok = await write(() => lavRef(c.id).update({ foto: list, updatedAt: new Date().toISOString() }));
-    if (ok && gone && gone.id && S.assets) { try { await S.assets.delete(gone.id); } catch (e) { /* solo gli editor possono cancellare il file: resta nell'archivio */ } }
+    if (ok && gone && gone.id && gone.sp && S.assets) { try { await S.assets.delete(gone.id); } catch (e) { /* solo gli editor possono cancellare il file: resta nell'archivio */ } }
   }
 });
 $("dbody").addEventListener("change", async ev => {
@@ -1166,7 +1168,7 @@ $("dbody").addEventListener("change", async ev => {
     for (let i = 0; i < files.length; i++) {
       if (lab) lab.firstChild.textContent = `Caricamento ${i + 1}/${files.length}…`;
       const blob = await shrink(files[i]), a = await uploadAsset(blob);
-      if (a) added.push({ id: a.id, url: a.url, nome: files[i].name, at: new Date().toISOString() });
+      if (a) added.push({ id: a.id, url: a.url, nome: files[i].name, at: new Date().toISOString(), sp: !!a.sp });
     }
     if (!added.length) { if (lab) lab.firstChild.textContent = "+ Aggiungi foto"; return; }
     const c = cardById(edit.id), list = (Array.isArray(c.foto) ? c.foto : []).concat(added);
@@ -1510,6 +1512,43 @@ function flush(filename) {
   return F.inflight;
 }
 const saveJson = filename => flush(filename);   // compatibilità con le chiamate esistenti: i dati si leggono dallo stato
+/* ---------- foto: cartella foto/AAAA-MM/ accanto ai file dei dati ----------
+   Caricamento con PUT (le foto sono già ridotte da shrink, sotto i 4 MB), mai sovrascrivendo un file esistente.
+   In lavori.json ogni foto è {id, url, nome, at, sp: true}: id = driveItem di SharePoint, url = pagina SharePoint.
+   La miniatura si chiede a Graph con il token (gli <img> non possono usare il token) e si tiene in memoria. */
+const fotoDir = () => (FS["lavori.json"] && FS["lavori.json"].path ? FS["lavori.json"].path.replace(/\/[^/]*$/, "") : FOLDER_PATH) + "/foto/" + new Date().toISOString().slice(0, 7);
+const ASSETS = {
+  async upload(blob) {
+    const sid = await getSiteId(), ext = (blob.type || "").includes("png") ? "png" : (blob.type || "").includes("webp") ? "webp" : "jpg";
+    const nome = `${(edit && edit.id) || "foto"}_${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
+    const res = await graphRaw(`/sites/${sid}/drive/root:/${fotoDir()}/${nome}:/content`, {
+      method: "PUT", headers: { "Content-Type": blob.type || "image/jpeg", "If-None-Match": "*" }, body: blob
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const it = await res.json();
+    return { id: it.id, url: it.webUrl, sp: true };
+  },
+  async delete(id) {
+    const sid = await getSiteId(), res = await graphRaw(`/sites/${sid}/drive/items/${id}`, { method: "DELETE" });
+    if (!res.ok && res.status !== 404) throw new Error("HTTP " + res.status);
+  }
+};
+const THUMB = new Map();
+async function thumbUrl(id) {
+  if (!THUMB.has(id)) THUMB.set(id, (async () => {
+    const sid = await getSiteId(), r = await graph(`/sites/${sid}/drive/items/${id}/thumbnails/0/large`, { cache: "no-store" });
+    return r && r.url;
+  })().catch(e => { THUMB.delete(id); throw e; }));
+  return THUMB.get(id);
+}
+function hydrateFotos(root) {
+  (root || document).querySelectorAll("img[data-fid]:not([src])").forEach(img => {
+    if (img.dataset.loading) return; img.dataset.loading = "1";
+    thumbUrl(img.dataset.fid).then(u => { if (u) img.src = u; else throw 0; })
+      .catch(() => { const fig = img.closest("figure"); if (fig) fig.querySelector("a").outerHTML = `<div class="fotona">Foto non trovata</div>`; });
+  });
+}
+new MutationObserver(() => hydrateFotos($("dbody"))).observe($("dbody"), { childList: true, subtree: true });
 // controllo periodico: se un collega ha salvato, aggiorna la vista (le modifiche in sospeso qui vanno al salvataggio, che fonde)
 async function pollRemote() {
   if (document.hidden || !S.canWrite) return;
@@ -1660,6 +1699,7 @@ const formDirty = () => $("drawer").hidden ? false : ($("dtitle").textContent ==
       })
     };
 
+    S.assets = ASSETS;
     schedule();
     toast("Dati caricati da SharePoint");
     gate.ready();
