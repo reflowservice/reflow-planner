@@ -799,13 +799,9 @@ async function write(fn) {
   S.saving++;
   try {
     await fn();
-    // Auto-save su SharePoint
-    if (typeof saveJson === "function") {
-      await saveJson("lavori.json", S.cards);
-      await saveJson("risorse.json", S.res);
-      console.log("Auto-saved");
-    }
-    return true;
+    // salva su SharePoint solo le voci cambiate, fondendole con le modifiche dei colleghi (vedi SYNC più sotto)
+    const ok = await Promise.all(SYNC_FILES.map(flush));
+    return ok.every(Boolean);
   } catch (e) {
     console.error("Write error", e);
     toast("Modifica non salvata");
@@ -1367,7 +1363,7 @@ async function getToken() {
   }
 }
 
-async function graph(path, options = {}) {
+async function graphRaw(path, options = {}) {
   if (!accessToken) accessToken = await getToken();
   const res = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
     ...options,
@@ -1377,11 +1373,15 @@ async function graph(path, options = {}) {
       ...(options.headers || {})
     }
   });
-  if (res.status === 401) {
+  if (res.status === 401 && !options._retry) {
     accessToken = await getToken();
-    return graph(path, options);
+    return graphRaw(path, { ...options, _retry: true });
   }
-  if (!res.ok) throw new Error(await res.text());
+  return res;
+}
+async function graph(path, options = {}) {
+  const res = await graphRaw(path, options);
+  if (!res.ok) { const e = new Error(await res.text()); e.status = res.status; throw e; }
   return res.status === 204 ? null : res.json();
 }
 
@@ -1398,49 +1398,143 @@ async function getSiteId() {
   return siteId;
 }
 
-// Debug
-window.debugGraph = graph;
-window.debugGetSite = getSiteId;
-
-async function loadJson(filename) {
-  const sid = await getSiteId();
-  const candidates = [
-    `/sites/${sid}/drive/root:/${FOLDER_PATH}/${filename}:/content`,
-    `/sites/${sid}/drive/root:/Documenti condivisi/${FOLDER_PATH}/${filename}:/content`,
-    `/sites/${sid}/drive/root:/Reflow - Operativo - Documenti/${FOLDER_PATH}/${filename}:/content`
-  ];
-  for (const path of candidates) {
-    try {
-      const data = await graph(path, { cache: "no-store" });
-      console.log("Found with path:", path);
-      return Array.isArray(data) ? data : [];
-    } catch (e) {
-      console.warn("Tried and failed:", path);
-    }
+/* ========== SYNC: salvataggio con controllo di versione e fusione per voce ==========
+   Ogni file si salva con If-Match sull'eTag dell'ultima versione letta. Se nel frattempo un collega ha salvato
+   (412), si rilegge il file e si riapplicano sopra solo le voci cambiate su questo dispositivo dall'ultima lettura
+   (aggiunte, modificate, eliminate): le modifiche degli altri restano. Due persone sulla stessa voce: vince l'ultima,
+   solo per quella voce. Ogni 15 s si controlla l'eTag e, se il file è cambiato, si aggiorna la vista. */
+const PATH_PREFIXES = ["", "Documenti condivisi/", "Reflow - Operativo - Documenti/"];
+const hashId = x => { const t = JSON.stringify(x); let h = 0x811c9dc5; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193); } return "x" + (h >>> 0).toString(36); };
+const newLavId = () => "l" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const lavKey = x => x.id || hashId(x);   // voci senza id (create prima di questa versione): id stabile dal contenuto, uguale su tutti i dispositivi
+const SYNC_DEF = {
+  "lavori.json":   { get: () => S.cards, set: a => { S.cards = a; }, key: lavKey,
+                     view: a => a.filter(c => c && c.inizio && c.fine).map(c => c.id ? c : { ...c, id: lavKey(c) }) },
+  "risorse.json":  { get: () => S.res, set: a => { S.res = a; sortRes(); }, key: x => x.id, view: a => a.filter(x => x && x.id) },
+  "impianti.json": { get: () => Array.from(S.imp.values()), set: a => { S.imp = new Map(a.map(i => [i.id || i.nome, i])); buildImpRe(); },
+                     key: x => x.id || x.nome, view: a => a.filter(x => x && (x.id || x.nome)) }
+};
+const SYNC_FILES = Object.keys(SYNC_DEF);
+const FS = {};   // per file: path, etag, server (array completo), base (chiave -> JSON della vista all'ultima lettura/scrittura), inflight, again
+const clone = a => JSON.parse(JSON.stringify(a));
+const mapJson = (arr, k) => new Map(arr.map(x => [k(x), JSON.stringify(x)]));
+function diffOf(base, local, k) {
+  const up = new Map(), del = new Set(), seen = new Set();
+  local.forEach(x => { const key = k(x); seen.add(key); if (base.get(key) !== JSON.stringify(x)) up.set(key, x); });
+  base.forEach((_, key) => { if (!seen.has(key)) del.add(key); });
+  return { up, del, empty: !up.size && !del.size };
+}
+function applyDiff(arr, d, k) {
+  const out = [], done = new Set();
+  arr.forEach(x => {
+    const key = x == null ? undefined : k(x);
+    if (key !== undefined && d.del.has(key)) return;
+    if (key !== undefined && d.up.has(key)) { out.push(d.up.get(key)); done.add(key); } else out.push(x);
+  });
+  d.up.forEach((x, key) => { if (!done.has(key)) out.push(x); });
+  return out;
+}
+async function readFile(filename) {
+  const sid = await getSiteId(), F = FS[filename] || (FS[filename] = {});
+  const paths = F.path ? [F.path] : PATH_PREFIXES.map(p => `${p}${FOLDER_PATH}/${filename}`);
+  for (const path of paths) {
+    let meta;
+    try { meta = await graph(`/sites/${sid}/drive/root:/${path}?$select=eTag`, { cache: "no-store" }); }
+    catch (e) { console.warn("Tried and failed:", path); continue; }
+    const data = await graph(`/sites/${sid}/drive/root:/${path}:/content`, { cache: "no-store" });
+    F.path = path;
+    return { etag: meta.eTag, data: Array.isArray(data) ? data : [] };
   }
   console.error("All paths failed for", filename);
-  return [];
+  // file non trovato o non raggiungibile: nessun eTag, quindi il primo salvataggio parte con If-None-Match: *
+  // e non può sovrascrivere un file esistente (riceve 412, rilegge e fonde)
+  F.path = F.path || `${FOLDER_PATH}/${filename}`;
+  return { etag: null, data: [] };
 }
-
-async function saveJson(filename, data) {
-  S.saving++;
-  try {
-    const sid = await getSiteId();
-    const path = `/sites/${sid}/drive/root:/${FOLDER_PATH}/${filename}:/content`;
-    console.log("Saving", filename, "to", path);
-    await graph(path, {
-      method: "PUT",
-      body: JSON.stringify(data, null, 2)
-    });
-    console.log("Saved", filename, "OK");
-    S.saveErr.delete(filename);
-    toast("Salvato");
-  } catch (e) {
-    console.error("Save failed", filename, e);
-    S.saveErr.add(filename);
-    toast("Errore salvataggio: " + e.message);
-  } finally { S.saving--; }
+async function loadJson(filename) {
+  const r = await readFile(filename), F = FS[filename], def = SYNC_DEF[filename];
+  if (!def) return r.data;
+  F.server = r.data; F.etag = r.etag;
+  const view = def.view(r.data); F.base = mapJson(view, def.key);
+  return view;
 }
+async function putFile(filename, body, etag) {
+  const sid = await getSiteId(), F = FS[filename];
+  const res = await graphRaw(`/sites/${sid}/drive/root:/${F.path}:/content`, {
+    method: "PUT", headers: etag ? { "If-Match": etag } : { "If-None-Match": "*" }, body: JSON.stringify(body, null, 2)
+  });
+  if (res.ok) return { ok: true, etag: (await res.json()).eTag };
+  return { ok: false, status: res.status, text: await res.text() };
+}
+async function syncRound(filename) {
+  const def = SYNC_DEF[filename], F = FS[filename];
+  const local0 = clone(def.get()), d = diffOf(F.base, local0, def.key);
+  if (d.empty) return;
+  let server = F.server, etag = F.etag, merged = false;
+  for (let i = 0; i < 6; i++) {
+    const body = applyDiff(server, d, def.key), r = await putFile(filename, body, etag);
+    if (r.ok) {
+      F.server = body; F.etag = r.etag;
+      const view = def.view(body); F.base = mapJson(view, def.key);
+      if (merged) {   // vista locale = versione unita + quello che è cambiato qui mentre si salvava
+        const late = diffOf(mapJson(local0, def.key), clone(def.get()), def.key);
+        def.set(applyDiff(clone(view), late, def.key));
+        if (!late.empty) F.again = true;
+        render();
+        console.log("Saved", filename, "merged with remote changes");
+      } else console.log("Saved", filename, "OK");
+      return;
+    }
+    if (r.status !== 412 && r.status !== 409) { const e = new Error(r.text || "HTTP " + r.status); e.status = r.status; throw e; }
+    const fresh = await readFile(filename); server = fresh.data; etag = fresh.etag; merged = true;
+  }
+  throw new Error("il file è cambiato troppe volte durante il salvataggio");
+}
+function flush(filename) {
+  const F = FS[filename];
+  if (!F || !F.base) return Promise.resolve(true);   // file non ancora caricato
+  if (F.inflight) { F.again = true; return F.inflight; }
+  F.inflight = (async () => {
+    S.saving++;
+    try {
+      do { F.again = false; await syncRound(filename); } while (F.again);
+      S.saveErr.delete(filename);
+      return true;
+    } catch (e) {
+      console.error("Save failed", filename, e);
+      S.saveErr.add(filename);
+      toast("Errore salvataggio: " + e.message);
+      return false;
+    } finally { S.saving--; F.inflight = null; }
+  })();
+  return F.inflight;
+}
+const saveJson = filename => flush(filename);   // compatibilità con le chiamate esistenti: i dati si leggono dallo stato
+// controllo periodico: se un collega ha salvato, aggiorna la vista (le modifiche in sospeso qui vanno al salvataggio, che fonde)
+async function pollRemote() {
+  if (document.hidden || !S.canWrite) return;
+  let changed = false;
+  for (const filename of SYNC_FILES) {
+    const F = FS[filename], def = SYNC_DEF[filename];
+    if (!F || !F.base || F.inflight || !F.etag) continue;
+    let et;
+    try { et = (await graph(`/sites/${await getSiteId()}/drive/root:/${F.path}?$select=eTag`, { cache: "no-store" })).eTag; } catch (e) { continue; }
+    if (et === F.etag || F.inflight) continue;
+    if (!diffOf(F.base, def.get(), def.key).empty) { flush(filename); continue; }
+    const local0 = clone(def.get());
+    let fresh; try { fresh = await readFile(filename); } catch (e) { continue; }
+    if (!fresh.etag || F.inflight) continue;
+    F.server = fresh.data; F.etag = fresh.etag;
+    const view = def.view(fresh.data); F.base = mapJson(view, def.key);
+    const late = diffOf(mapJson(local0, def.key), clone(def.get()), def.key);   // modifiche fatte qui durante la lettura
+    def.set(applyDiff(clone(view), late, def.key));
+    if (!late.empty) flush(filename);
+    changed = true;
+  }
+  if (changed) render();
+}
+setInterval(() => { pollRemote().catch(e => console.warn("poll", e)); }, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pollRemote().catch(() => {}); });
 
 /* ---------- Aggiorna: schermata di aggiornamento e pulsante ---------- */
 let REFRESH = false;   // true se la pagina nasce da "Aggiorna"
@@ -1501,7 +1595,7 @@ const formDirty = () => $("drawer").hidden ? false : ($("dtitle").textContent ==
       loadJson("storico.json")
     ]);
 
-    S.cards = lavori.filter(c => c && c.inizio && c.fine);
+    S.cards = lavori;
     S.res = risorse;
     sortRes();
     S.gotRes = true;
@@ -1521,26 +1615,11 @@ const formDirty = () => $("drawer").hidden ? false : ($("dtitle").textContent ==
     });
     S.gotCards = true;
 
-    // Intercetta la funzione write
-    const originalWrite = window.write || write;
-    window.write = async function(fn) {
-      try {
-        await fn();
-        // Dopo ogni scrittura, salva tutto
-        await saveJson("lavori.json", S.cards);
-        await saveJson("risorse.json", S.res);
-        console.log("Auto-saved after write");
-        return true;
-      } catch (e) {
-        console.error("Write failed", e);
-        return false;
-      }
-    };
-
     // Mock del db per risorse e impianti
     S.db = {
       collection: (name) => ({
         doc: (id) => ({
+          id: id || (name === "lavori" ? newLavId() : undefined),
           set: async (body) => {
             if (name === "risorse") {
               const idx = S.res.findIndex(r => r.id === id);
@@ -1580,10 +1659,6 @@ const formDirty = () => $("drawer").hidden ? false : ($("dtitle").textContent ==
         })
       })
     };
-
-    // Risorse
-    const saveRes = async () => saveJson("risorse.json", S.res);
-    // (le funzioni di modifica risorse chiamano già update, le intercettiamo più avanti se serve)
 
     schedule();
     toast("Dati caricati da SharePoint");
