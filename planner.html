@@ -332,6 +332,8 @@ button.stat[aria-pressed="true"] { background: rgba(255, 120, 120, .10); box-sha
 .fotos figure { margin: 0; position: relative; aspect-ratio: 1; border-radius: 9px; overflow: hidden; background: var(--surface-3); max-width: 100%; }
 .fotos img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .fotos img:not([src]) { visibility: hidden; }
+.fotodest { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fotodest select { max-width: 100%; font: inherit; padding: 4px 6px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: inherit; }
 .fotos .fotona { display: flex; align-items: center; justify-content: center; height: 100%; padding: 6px; text-align: center; font-size: 11px; color: var(--ink-3, #667); }
 .rmf { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 50%; border: 0; background: rgba(10, 15, 25, .65); color: #fff; font-size: 13px; line-height: 1; }
 .rmf.armed { background: var(--crit); }
@@ -980,7 +982,8 @@ function fotoSection(c, ro) {
   return `<div class="fld" id="f-fotosec"><span>Foto intervento${f.length ? ` · ${f.length}` : ""}</span><div class="fotos">` +
     f.map((x, i) => `<figure>${x.sp ? `<a href="${esc(x.url)}" target="_blank" rel="noopener" title="Apri in SharePoint"><img data-fid="${esc(x.id)}" alt="${esc(x.nome || "Foto intervento")}"></a>` : `<div class="fotona" title="Foto del vecchio archivio dell'app, non più disponibile">Foto non disponibile</div>`}${ro ? "" : `<button type="button" class="rmf" data-rmfoto="${i}" aria-label="Elimina foto">×</button>`}</figure>`).join("") +
     (!ro && S.assets ? `<label class="addf" id="f-addf">+ Aggiungi foto<input type="file" accept="image/jpeg,image/png,image/webp,image/heic" multiple data-fotoup="1" hidden></label>` : "") +
-    `</div>${!f.length && (ro || !S.assets) ? '<span class="sub">Nessuna foto</span>' : ""}</div>`;
+    `</div>${!f.length && (ro || !S.assets) ? '<span class="sub">Nessuna foto</span>' : ""}` +
+    (!ro && S.assets ? `<div class="sub fotodest"><span id="f-fotosel"></span><span id="f-fotodest"></span></div>` : "") + `</div>`;
 }
 function renderImps() {
   if (!edit) return;
@@ -1174,7 +1177,7 @@ $("dbody").addEventListener("change", async ev => {
     const c = cardById(edit.id), list = (Array.isArray(c.foto) ? c.foto : []).concat(added);
     c.foto = list; $("f-fotosec").outerHTML = fotoSection(c, false); render();
     const ok = await write(() => lavRef(c.id).update({ foto: list, updatedAt: new Date().toISOString() }));
-    if (ok) toast(added.length === 1 ? "Foto aggiunta" : `${added.length} foto aggiunte`);
+    if (ok) toast((added.length === 1 ? "Foto aggiunta in " : `${added.length} foto aggiunte in `) + (S.lastFotoDest || "SharePoint"), null, 6000);
   }
 });
 
@@ -1516,16 +1519,55 @@ const saveJson = filename => flush(filename);   // compatibilità con le chiamat
    Caricamento con PUT (le foto sono già ridotte da shrink, sotto i 4 MB), mai sovrascrivendo un file esistente.
    In lavori.json ogni foto è {id, url, nome, at, sp: true}: id = driveItem di SharePoint, url = pagina SharePoint.
    La miniatura si chiede a Graph con il token (gli <img> non possono usare il token) e si tiene in memoria. */
-const fotoDir = () => (FS["lavori.json"] && FS["lavori.json"].path ? FS["lavori.json"].path.replace(/\/[^/]*$/, "") : FOLDER_PATH) + "/foto/" + new Date().toISOString().slice(0, 7);
+/* Destinazione: cartella FOTO dell'impianto in 5_SERVICE (campo "service" di impianti.json = percorso della sua
+   SERVICE IMPIANTO), sottocartella "AAAA.MM.GG - descrizione" del lavoro (data d'inizio), come nell'archiviazione
+   manuale. Si creano solo FOTO e la sottocartella, mai cartelle di cliente o impianto: se l'impianto non ha cartella
+   (o la cartella non esiste più) le foto vanno nella cartella di riserva REFLOW PLANNER/foto/AAAA-MM. */
+const fotoRiserva = () => (FS["lavori.json"] && FS["lavori.json"].path ? FS["lavori.json"].path.replace(/\/[^/]*$/, "") : FOLDER_PATH) + "/foto/" + new Date().toISOString().slice(0, 7);
+const segEnc = p => p.split("/").map(encodeURIComponent).join("/");
+const pulisci = t => String(t || "").trim().replace(/^\d{1,2}\)\s*/, "").replace(/(^|\s)\d{1,2}\)(?=\S)/g, "$1").replace(/→/g, "-").replace(/["*:<>?\/\\|#%{}~&\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
+function descr(t) {   // descrizione breve per il nome della cartella: max 60 caratteri, parola intera, niente parentesi aperte
+  let d = pulisci(t); if (d.length > 60) d = d.slice(0, 60).replace(/\s+\S*$/, "");
+  const a = d.lastIndexOf("("); if (a >= 0 && d.indexOf(")", a) < 0) d = d.slice(0, a);
+  return d.replace(/[\s.\-]+$/, "") || "Intervento";
+}
+function fotoIds() { return ((edit && edit.imps) || []).filter(id => S.imp.has(id) && S.imp.get(id).service); }
+function fotoDest(c) {
+  const ids = fotoIds(), sel = $("f-fotoimp"), id = sel && ids.includes(sel.value) ? sel.value : ids[0];
+  if (!id || !c) return { dir: fotoRiserva(), label: "cartella di riserva REFLOW PLANNER › foto (impianto senza cartella in 5_SERVICE)", ids };
+  const sub = (c.inizio || "").replace(/-/g, ".") + " - " + descr(c.testo);
+  return { base: S.imp.get(id).service, dir: S.imp.get(id).service + "/FOTO/" + sub, label: S.imp.get(id).nome + " › FOTO › " + sub, ids, id };
+}
+async function mkdir(sid, parent, name) {   // crea la cartella se manca; false se manca la cartella superiore
+  const r = await graphRaw(`/sites/${sid}/drive/root:/${segEnc(parent)}:/children`, {
+    method: "POST", body: JSON.stringify({ name, folder: {}, "@microsoft.graph.conflictBehavior": "fail" })
+  });
+  if (r.ok || r.status === 409) return true;
+  if (r.status === 404) return false;
+  throw new Error("HTTP " + r.status);
+}
+async function putFoto(sid, dir, nome, blob) {
+  return graphRaw(`/sites/${sid}/drive/root:/${segEnc(dir)}/${encodeURIComponent(nome)}:/content`, {
+    method: "PUT", headers: { "Content-Type": blob.type || "image/jpeg", "If-None-Match": "*" }, body: blob
+  });
+}
 const ASSETS = {
   async upload(blob) {
     const sid = await getSiteId(), ext = (blob.type || "").includes("png") ? "png" : (blob.type || "").includes("webp") ? "webp" : "jpg";
     const nome = `${(edit && edit.id) || "foto"}_${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
-    const res = await graphRaw(`/sites/${sid}/drive/root:/${fotoDir()}/${nome}:/content`, {
-      method: "PUT", headers: { "Content-Type": blob.type || "image/jpeg", "If-None-Match": "*" }, body: blob
-    });
+    let d = fotoDest(edit && edit.id ? cardById(edit.id) : null), res = await putFoto(sid, d.dir, nome, blob);
+    if (res.status === 404 && d.base) {   // FOTO o sottocartella mancanti: si creano (solo queste due)
+      const sub = d.dir.slice((d.base + "/FOTO/").length);
+      if (await mkdir(sid, d.base, "FOTO") && await mkdir(sid, d.base + "/FOTO", sub)) res = await putFoto(sid, d.dir, nome, blob);
+      else { d = { dir: fotoRiserva(), label: "cartella di riserva REFLOW PLANNER › foto (cartella dell'impianto non trovata)" }; res = await putFoto(sid, d.dir, nome, blob); }
+    }
+    if (res.status === 404 && !d.base) {   // prima foto del mese nella cartella di riserva
+      const dir = d.dir, up = dir.replace(/\/[^/]*$/, ""), last = dir.slice(up.length + 1), fo = up.replace(/\/[^/]*$/, "");
+      await mkdir(sid, fo, "foto"); await mkdir(sid, up, last); res = await putFoto(sid, dir, nome, blob);
+    }
     if (!res.ok) throw new Error("HTTP " + res.status);
     const it = await res.json();
+    S.lastFotoDest = d.label;
     return { id: it.id, url: it.webUrl, sp: true };
   },
   async delete(id) {
@@ -1548,7 +1590,18 @@ function hydrateFotos(root) {
       .catch(() => { const fig = img.closest("figure"); if (fig) fig.querySelector("a").outerHTML = `<div class="fotona">Foto non trovata</div>`; });
   });
 }
-new MutationObserver(() => hydrateFotos($("dbody"))).observe($("dbody"), { childList: true, subtree: true });
+function refreshFotoDest() {
+  const el = $("f-fotodest"), box = $("f-fotosel"); if (!el || !box || !edit) return;
+  const ids = fotoIds(), key = ids.join("|");
+  if (box.dataset.k !== key) {
+    box.dataset.k = key;
+    box.innerHTML = ids.length > 1 ? `<select id="f-fotoimp" aria-label="Impianto delle foto">${ids.map(id => `<option value="${esc(id)}">${esc(S.imp.get(id).nome)}</option>`).join("")}</select>` : "";
+  }
+  const t = "Le foto vanno in: " + fotoDest(edit.id ? cardById(edit.id) : null).label;
+  if (el.textContent !== t) el.textContent = t;
+}
+new MutationObserver(() => { hydrateFotos($("dbody")); refreshFotoDest(); }).observe($("dbody"), { childList: true, subtree: true });
+$("dbody").addEventListener("change", ev => { if (ev.target.id === "f-fotoimp") refreshFotoDest(); });
 // controllo periodico: se un collega ha salvato, aggiorna la vista (le modifiche in sospeso qui vanno al salvataggio, che fonde)
 async function pollRemote() {
   if (document.hidden || !S.canWrite) return;
