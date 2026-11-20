@@ -1603,7 +1603,9 @@ function fotoIds() { return ((edit && edit.imps) || []).filter(id => servs(id).l
 function fotoScelte() {
   if (!edit) return { opts: [], scegli: false };
   const testo = ($("f-testo") && $("f-testo").value) || (edit.v && edit.v.testo) || "";
-  const base = fotoIds(), groups = edit.impExplicit ? [] : ambOf(testo).map(g => ({ key: g.key, ids: g.ids.filter(id => servs(id).length && !base.includes(id)) })).filter(g => g.ids.length);
+  const base = fotoIds(), groups = edit.impExplicit ? [] : ambOf(testo)
+    .filter(g => !g.ids.some(id => edit.imps.includes(id)))   // il testo indica già l'impianto preciso (es. "NOGAROLE A1"): nessuna domanda
+    .map(g => ({ key: g.key, ids: g.ids.filter(id => servs(id).length) })).filter(g => g.ids.length);
   const opts = base.map(id => ({ v: id, ids: [id], l: S.imp.get(id).nome }));
   groups.forEach(g => {
     g.ids.forEach(id => { if (!opts.some(o => o.v === id)) opts.push({ v: id, ids: [id], l: S.imp.get(id).nome }); });
