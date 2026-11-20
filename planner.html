@@ -529,20 +529,32 @@ function autoRegion(text, area) {
   regCache.set(k, r); return r;
 }
 /* impianti (anagrafica da REFLOW MASTER): riconosciuti dal testo con parole chiave univoche, oppure scelti a mano */
-let IMP_RE = null, IMP_KEY = new Map();
+let IMP_RE = null, IMP_KEY = new Map(), AMB_RE = null, AMB_KEY = new Map();
 const impCache = new Map();
 const reEsc = k => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function buildImpRe() {
   IMP_KEY = new Map();
-  S.imp.forEach((d, id) => (d.chiavi || []).forEach(k => { const n = normTxt(k); if (n.length < 3) return; IMP_KEY.set(n, IMP_KEY.has(n) && IMP_KEY.get(n) !== id ? null : id); }));
+  AMB_KEY = new Map();   // chiavi comuni a più impianti (es. "stef nogarole"): non riconoscono un impianto, ma servono per chiedere quale
+  S.imp.forEach((d, id) => (d.chiavi || []).forEach(k => { const n = normTxt(k); if (n.length < 3) return;
+    if (!AMB_KEY.has(n)) AMB_KEY.set(n, new Set()); AMB_KEY.get(n).add(id);
+    IMP_KEY.set(n, IMP_KEY.has(n) && IMP_KEY.get(n) !== id ? null : id); }));
+  [...AMB_KEY].forEach(([k, v]) => { if (v.size < 2) AMB_KEY.delete(k); });
   const keys = [...IMP_KEY].filter(([, v]) => v).map(([k]) => k).sort((a, b) => b.length - a.length);
   IMP_RE = keys.length ? new RegExp("\\b(" + keys.map(reEsc).join("|") + ")\\b", "g") : null;
+  const ak = [...AMB_KEY.keys()].sort((a, b) => b.length - a.length);
+  AMB_RE = ak.length ? new RegExp("\\b(" + ak.map(reEsc).join("|") + ")\\b", "g") : null;
   impCache.clear();
 }
 function autoImp(text) {
   const t = normTxt(text); if (impCache.has(t)) return impCache.get(t);
   const out = []; if (IMP_RE) { IMP_RE.lastIndex = 0; let m; while ((m = IMP_RE.exec(t))) { const id = IMP_KEY.get(m[1]); if (id && !out.includes(id)) out.push(id); } }
   impCache.set(t, out); return out;
+}
+function ambOf(text) {   // gruppi di impianti nominati in modo ambiguo nel testo: [{key, ids}]
+  const t = normTxt(text), out = []; if (!AMB_RE) return out;
+  AMB_RE.lastIndex = 0; let m;
+  while ((m = AMB_RE.exec(t))) if (!out.some(g => g.key === m[1])) out.push({ key: m[1], ids: [...AMB_KEY.get(m[1])] });
+  return out;
 }
 function impsOf(c) {
   if (c.kind === "assenza") return [];
@@ -1042,8 +1054,8 @@ async function shrink(file) {
     return b || file;
   } catch (e) { return file; }
 }
-async function uploadAsset(blob) {
-  try { return await S.assets.upload(blob); }
+async function uploadAsset(blob, d, cid) {
+  try { return await S.assets.upload(blob, d, cid); }
   catch (e) { toast("Caricamento non riuscito" + (e && e.message ? ": " + e.message : ". Riprova.")); return null; }
 }
 function openDrawer() { S.formDirty = false; $("scrim").hidden = false; $("drawer").hidden = false; }
@@ -1215,16 +1227,21 @@ $("dbody").addEventListener("change", async ev => {
     return;
   }
   if (t.dataset.fotoup && t.files && t.files.length && edit && edit.id) {
-    const files = [...t.files], added = [], lab = $("f-addf");
-    for (let i = 0; i < files.length; i++) {
-      if (lab) lab.firstChild.textContent = `Caricamento ${i + 1}/${files.length}…`;
-      const blob = await shrink(files[i]), a = await uploadAsset(blob);
-      if (a) added.push({ id: a.id, url: a.url, nome: files[i].name, at: new Date().toISOString(), sp: !!a.sp, ...(a.copie ? { copie: a.copie } : {}) });
-    }
-    if (!added.length) { if (lab) lab.firstChild.textContent = "+ Aggiungi foto"; return; }
-    const c = cardById(edit.id), list = (Array.isArray(c.foto) ? c.foto : []).concat(added);
-    c.foto = list; $("f-fotosec").outerHTML = fotoSection(c, false); render();
-    const ok = await write(() => lavRef(c.id).update({ foto: list, updatedAt: new Date().toISOString() }));
+    const cid = edit.id, d = fotoDest(cardById(cid)), files = [...t.files], added = [], lab = $("f-addf");
+    if (d.scegli) { t.value = ""; toast("Scegli prima l'impianto delle foto: il testo ne nomina più di uno."); const s = $("f-fotoimp"); if (s) s.focus(); return; }
+    S.fotoBusy = (S.fotoBusy || 0) + 1;
+    try {
+      for (let i = 0; i < files.length; i++) {
+        if (lab && lab.isConnected) lab.firstChild.textContent = `Caricamento ${i + 1}/${files.length}…`;
+        const blob = await shrink(files[i]), a = await uploadAsset(blob, d, cid);
+        if (a) added.push({ id: a.id, url: a.url, nome: files[i].name, at: new Date().toISOString(), sp: !!a.sp, ...(a.copie ? { copie: a.copie } : {}) });
+      }
+    } finally { S.fotoBusy--; }
+    if (!added.length) { if (lab && lab.isConnected) lab.firstChild.textContent = "+ Aggiungi foto"; return; }
+    const c = cardById(cid); if (!c) { toast("Foto caricate, ma il lavoro non c'è più: avvisa l'amministratore."); return; }
+    const list = (Array.isArray(c.foto) ? c.foto : []).concat(added);
+    c.foto = list; if (edit && edit.id === cid && $("f-fotosec")) $("f-fotosec").outerHTML = fotoSection(c, false); render();
+    const ok = await write(() => lavRef(cid).update({ foto: list, updatedAt: new Date().toISOString() }));
     if (ok) toast((added.length === 1 ? "Foto aggiunta in " : `${added.length} foto aggiunte in `) + (S.lastFotoDest || "SharePoint"), null, 6000);
   }
 });
@@ -1581,6 +1598,19 @@ function descr(t) {   // descrizione breve per il nome della cartella: max 60 ca
 }
 const servs = id => { const v = S.imp.has(id) && S.imp.get(id).service; return !v ? [] : Array.isArray(v) ? v : [v]; };
 function fotoIds() { return ((edit && edit.imps) || []).filter(id => servs(id).length); }
+/* scelte per la cartella delle foto: impianti del lavoro + impianti nominati in modo ambiguo nel testo (es. "STEF NOGAROLE").
+   Con un'ambiguità la scheda chiede di scegliere (un impianto oppure "tutti", una copia per cartella) invece di prendere un altro impianto. */
+function fotoScelte() {
+  if (!edit) return { opts: [], scegli: false };
+  const testo = ($("f-testo") && $("f-testo").value) || (edit.v && edit.v.testo) || "";
+  const base = fotoIds(), groups = edit.impExplicit ? [] : ambOf(testo).map(g => ({ key: g.key, ids: g.ids.filter(id => servs(id).length && !base.includes(id)) })).filter(g => g.ids.length);
+  const opts = base.map(id => ({ v: id, ids: [id], l: S.imp.get(id).nome }));
+  groups.forEach(g => {
+    g.ids.forEach(id => { if (!opts.some(o => o.v === id)) opts.push({ v: id, ids: [id], l: S.imp.get(id).nome }); });
+    if (g.ids.length > 1) opts.push({ v: "g:" + g.key, ids: g.ids, l: `Tutti gli impianti "${g.key.toUpperCase()}" (${g.ids.length})` });
+  });
+  return { opts, scegli: groups.length > 0 && opts.length > 1 };
+}
 /* Impianto con più cartelle (sottoimpianti, es. tetto e terra): si sceglie la cartella se il testo del lavoro contiene
    un dato che la distingue: il nome della cartella (es. "CAMPO C", "BENOZZI C2") oppure parole che stanno solo in alcune
    cartelle (es. TETTO, SUD, MIA, GASDOTTO, 2023, C4). Le parole del nome dell'impianto contano solo se stanno in una
@@ -1615,7 +1645,15 @@ function scegliServs(id, testo) {
   return max > 0 ? list.filter((sv, i) => punti[i] === max) : list;
 }
 function fotoDest(c) {
-  const ids = fotoIds(), sel = $("f-fotoimp"), id = sel && ids.includes(sel.value) ? sel.value : ids[0];
+  const { opts, scegli } = fotoScelte(), ids = opts.map(o => o.v), sel = $("f-fotoimp");
+  const o = sel && opts.find(x => x.v === sel.value) || (scegli ? null : opts[0]);
+  if (scegli && !o) return { dirs: [], scegli: true, label: "scegli qui sotto l'impianto (il testo ne nomina più di uno)", ids };
+  if (o && o.ids.length > 1 && c) {   // "tutti": una copia per ogni cartella diversa
+    const sub = (c.inizio || "").replace(/-/g, ".") + " - " + descr(c.testo);
+    const list = [...new Set(o.ids.flatMap(servs))];
+    return { dirs: list.map(base => ({ base, dir: base + "/FOTO/" + sub })), label: `${o.l} › FOTO › ${sub} (copiata in ${list.length} cartelle: ${list.map(foglia).join("; ")})`, ids, id: o.ids[0] };
+  }
+  const id = o && o.ids[0];
   if (!id || !c) return { dirs: [{ dir: fotoRiserva() }], label: "cartella di riserva REFLOW PLANNER › foto (impianto senza cartella in 5_SERVICE)", ids };
   const sub = (c.inizio || "").replace(/-/g, ".") + " - " + descr(c.testo), list = scegliServs(id, c.testo);
   const label = S.imp.get(id).nome + " › FOTO › " + sub + (list.length > 1 ? ` (copiata in ${list.length} cartelle: ${list.map(foglia).join("; ")})` : servs(id).length > 1 ? ` (cartella ${foglia(list[0])})` : "");
@@ -1635,10 +1673,10 @@ async function putFoto(sid, dir, nome, blob) {
   });
 }
 const ASSETS = {
-  async upload(blob) {
+  async upload(blob, d, cid) {   // d = destinazione e cid = lavoro, fissati all'inizio del caricamento (la scheda può chiudersi nel frattempo)
     const sid = await getSiteId(), ext = (blob.type || "").includes("png") ? "png" : (blob.type || "").includes("webp") ? "webp" : "jpg";
-    const nome = `${(edit && edit.id) || "foto"}_${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
-    const d = fotoDest(edit && edit.id ? cardById(edit.id) : null), fatti = [];
+    const nome = `${cid || "foto"}_${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
+    const fatti = [];
     for (const t of d.dirs) {   // una copia per cartella
       let res = await putFoto(sid, t.dir, nome, blob);
       if (res.status === 404 && t.base) {   // FOTO o sottocartella mancanti: si creano (solo queste due)
@@ -1686,10 +1724,10 @@ function hydrateFotos(root) {
 }
 function refreshFotoDest() {
   const el = $("f-fotodest"), box = $("f-fotosel"); if (!el || !box || !edit) return;
-  const ids = fotoIds(), key = ids.join("|");
+  const { opts, scegli } = fotoScelte(), key = (scegli ? "?" : "") + opts.map(o => o.v).join("|");
   if (box.dataset.k !== key) {
     box.dataset.k = key;
-    box.innerHTML = ids.length > 1 ? `<select id="f-fotoimp" aria-label="Impianto delle foto">${ids.map(id => `<option value="${esc(id)}">${esc(S.imp.get(id).nome)}</option>`).join("")}</select>` : "";
+    box.innerHTML = opts.length > 1 ? `<select id="f-fotoimp" aria-label="Impianto delle foto">${scegli ? `<option value="">Scegli l'impianto delle foto…</option>` : ""}${opts.map(o => `<option value="${esc(o.v)}">${esc(o.l)}</option>`).join("")}</select>` : "";
   }
   const t = "Le foto vanno in: " + fotoDest(edit.id ? cardById(edit.id) : null).label;
   if (el.textContent !== t) el.textContent = t;
